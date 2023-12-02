@@ -10,9 +10,12 @@ import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
 import java.io.IOException;
-import java.net.URL;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -26,6 +29,8 @@ public class UploadFileServiceImpl implements UploadFileService {
     private UploadFileRepository repository;
     @Autowired
     private S3Client s3Client;
+    @Autowired
+    private S3Presigner s3Presigner;
     @Autowired
     private UploadFileConfiguration configuration;
 
@@ -54,15 +59,13 @@ public class UploadFileServiceImpl implements UploadFileService {
     public List<String> getAll() {
 
         final List<String> list = new ArrayList<>();
+
         final ListObjectsV2Response listObjectsV2Response = s3Client.listObjectsV2(ListObjectsV2Request.builder().
-                bucket(configuration.getBucketName()).
-                prefix(configuration.getMainFolder()).build());
+                bucket(configuration.getBucketName()).prefix(configuration.getMainFolder()).build());
+
         listObjectsV2Response.contents().forEach(object -> {
             if (!object.key().endsWith("/")) {
-                final GetUrlRequest urlRequest = GetUrlRequest.builder().bucket(configuration.getBucketName())
-                        .key(object.key()).build();
-                URL objectUrl = s3Client.utilities().getUrl(urlRequest);
-                list.add(String.valueOf(objectUrl));
+                list.add(getPreSignedUrl(s3Presigner, configuration.getBucketName(), object.key()));
             }
         });
         return list;
@@ -76,7 +79,7 @@ public class UploadFileServiceImpl implements UploadFileService {
                     .key(configuration.getMainFolder() + "/" + optional.get().getFileName())
                     .build();
             final DeleteObjectResponse deleteObjectResponse = s3Client.deleteObject(deleteObjectRequest);
-            if (deleteObjectResponse.deleteMarker()) {
+            if (Boolean.TRUE.equals(deleteObjectResponse.deleteMarker())) {
                 log.info("Successfully deleted the object");
                 return true;
             } else {
@@ -123,6 +126,15 @@ public class UploadFileServiceImpl implements UploadFileService {
             return fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase();
         }
         return "";
+    }
+
+    private String getPreSignedUrl(S3Presigner preSigner, String bucketName, String keyName) {
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName).key(keyName).build();
+        GetObjectPresignRequest getObjectPresignRequest = GetObjectPresignRequest.builder()
+                .signatureDuration(Duration.ofMinutes(1)).getObjectRequest(getObjectRequest).build();
+        PresignedGetObjectRequest presignedGetObjectRequest = preSigner.presignGetObject(getObjectPresignRequest);
+        return presignedGetObjectRequest.url().toString();
     }
 
 }
